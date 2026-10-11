@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
