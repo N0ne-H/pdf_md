@@ -1,7 +1,10 @@
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .venv/
 .vscode/
+.pdf_reader_cache/
+*.egg-info/
 input/*
 !input/.gitkeep
 output/*
