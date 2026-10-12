@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -39,6 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Windows 终端可能默认使用 GBK，而 PDF 内容包含 GBK 无法表示的字符。
+    # 统一用 UTF-8 输出 JSON，避免检索成功后在打印阶段报错。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
     service = ReaderService(args.cache_dir)

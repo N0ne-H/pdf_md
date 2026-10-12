@@ -49,7 +49,7 @@ python -m pdf_reader export DOC_ID -o "output/手册.md"
 
 `ingest` 返回 `cache_hit`、页数、块数及全文 Token 估算。同一 PDF 内容和解析配置再次导入时，`cache_hit` 为 `true`。可用 `--chunk-size 1200` 调整块上限，或用 `--no-images` 关闭图片提取；配置改变会生成不同文档 ID。缓存位于 `.pdf_reader_cache/`，不会提交到 Git。
 
-`outline` 返回标题层级和 PDF 原始页码。`search` 只返回命中的片段、章节、页码和块 ID；`max_chars` 限制所有片段正文的总字符数，JSON 元数据不在限制内。`read` 用块 ID 读取单块。`export` 才拼接所有页面，并把图片复制到 Markdown 旁边的 `images/文档ID前缀/` 目录；正文中插入 `<!-- PDF page N -->` 标记，便于核对原页。
+`outline` 返回标题层级和 PDF 原始页码。`search` 只返回命中的片段、章节、页码和块 ID；`max_chars` 限制所有片段正文的总字符数，JSON 元数据不在限制内。`read` 用块 ID 读取单块。CLI 的 JSON 输出使用 UTF-8。`export` 才拼接所有页面，并把图片复制到 Markdown 旁边的 `images/文档ID前缀/` 目录；正文中插入 `<!-- PDF page N -->` 标记，便于核对原页。
 
 旧命令仍可使用，内部也调用同一个 Core：
 

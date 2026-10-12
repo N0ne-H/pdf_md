@@ -10,8 +10,9 @@ import pymupdf
 import pytest
 
 from pdf_reader import ParseConfig, ReaderService
+from pdf_reader.cache import CacheStore
 from pdf_reader.chunking import chunk_pages
-from pdf_reader.models import Chunk, Document, Page
+from pdf_reader.models import Chunk, Document, Heading, Page
 from pdf_reader.parser import parse_pdf
 from pdf_reader.search import search_chunks
 
@@ -134,7 +135,7 @@ def test_cli_outline_search_read_and_export(sample_pdf: Path, tmp_path: Path):
     def command(*args: str) -> dict:
         result = subprocess.run(
             [sys.executable, "-m", "pdf_reader", "--cache-dir", str(cache), *args],
-            cwd=project, env=env, text=True, capture_output=True,
+            cwd=project, env=env, text=True, encoding="utf-8", capture_output=True,
         )
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
@@ -168,3 +169,25 @@ def test_invalid_pdf_reports_error(tmp_path: Path):
     pdf.write_text("not a PDF", encoding="utf-8")
     with pytest.raises(ValueError, match="无法打开 PDF"):
         ReaderService(tmp_path / "cache").ingest(pdf)
+
+
+def test_cli_outputs_utf8_even_when_terminal_uses_gbk(tmp_path: Path):
+    doc_id = "d" * 64
+    cache = tmp_path / "cache"
+    CacheStore(cache).save(Document(
+        id=doc_id,
+        source_sha256="e" * 64,
+        source_name="sample.pdf",
+        converter_version="test",
+        config=ParseConfig(),
+        pages=[Page(1, "# 标题∙特殊字符")],
+        headings=[Heading(1, "标题∙特殊字符", 1)],
+    ))
+    project = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": str(project / "src"), "PYTHONIOENCODING": "gbk"}
+    result = subprocess.run(
+        [sys.executable, "-m", "pdf_reader", "--cache-dir", str(cache), "outline", doc_id],
+        cwd=project, env=env, text=True, encoding="utf-8", capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["headings"][0]["title"] == "标题∙特殊字符"
