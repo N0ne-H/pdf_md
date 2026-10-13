@@ -1,11 +1,41 @@
-"""无外部索引的关键词检索，适合第一阶段的小型本地文档。"""
+"""无外部索引的本地相关性检索。"""
 
 import json
-import re
 from dataclasses import asdict
 
+from .evidence import assess_evidence
 from .models import Document, SearchHit, SearchResult
+from .retrieval import rank_chunks
 from .tokens import estimate_tokens
+
+
+def _snippet(markdown: str, budget: int) -> str:
+    if len(markdown) <= budget:
+        return markdown
+    # 优先在段落或句子结束处截断，同时避免只返回很短的开头。
+    start = max(1, int(budget * 0.6))
+    for boundary in ("\n\n", "\n", ". ", "。", "; "):
+        end = markdown.rfind(boundary, start, budget)
+        if end >= start:
+            return markdown[:end + len(boundary)].rstrip()
+    for boundary in ("\n\n", "\n", ". ", "。", "; ", " "):
+        end = markdown.rfind(boundary, 1, budget)
+        if end >= max(1, budget // 4):
+            return markdown[:end + len(boundary)].rstrip()
+    return markdown[:budget].rstrip()
+
+
+def _budgets(chunks: list, max_chars: int) -> list[int]:
+    # 排名越高得到的空间越多，但首条不能独占 max_chars。
+    if not chunks:
+        return []
+    weights = [1 / (index + 2) for index in range(len(chunks))]
+    total = sum(weights)
+    distributable = max_chars - len(chunks)
+    budgets = [1 + int(distributable * weight / total) for weight in weights]
+    for index in range(max_chars - sum(budgets)):
+        budgets[index % len(budgets)] += 1
+    return budgets
 
 
 def search_chunks(
@@ -13,25 +43,12 @@ def search_chunks(
 ) -> SearchResult:
     if top_k < 1 or max_chars < 1:
         raise ValueError("top_k 和 max_chars 必须大于 0")
-    terms = list(dict.fromkeys(re.findall(r"[\w]+", query.casefold())))
-    if not terms:
-        raise ValueError("检索词不能为空")
-
-    ranked = []
-    for chunk in document.chunks:
-        body = chunk.markdown.casefold()
-        section = chunk.section.casefold()
-        score = sum(body.count(term) + 2 * section.count(term) for term in terms)
-        if score:
-            ranked.append((score, chunk))
-    ranked.sort(key=lambda item: (-item[0], item[1].page_number, item[1].id))
+    ranked = rank_chunks(document.chunks, query)[:min(top_k, max_chars)]
 
     hits: list[SearchHit] = []
-    remaining = max_chars
-    for score, chunk in ranked[:top_k]:
-        if not remaining:
-            break
-        snippet = chunk.markdown[:remaining]
+    unused = 0
+    for (score, chunk), budget in zip(ranked, _budgets(ranked, max_chars)):
+        snippet = _snippet(chunk.markdown, budget + unused)
         hits.append(
             SearchHit(
                 chunk_id=chunk.id,
@@ -40,9 +57,10 @@ def search_chunks(
                 score=score,
                 markdown=snippet,
                 truncated=len(snippet) < len(chunk.markdown),
+                evidence_warnings=assess_evidence(chunk.markdown, query),
             )
         )
-        remaining -= len(snippet)
+        unused += budget - len(snippet)
 
     full_tokens = estimate_tokens(document.full_markdown())
     # 比较实际会交给 AI 的查询、命中元数据和正文，而不只统计片段正文。

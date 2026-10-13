@@ -45,6 +45,7 @@ class Document:
     pages: list[Page] = field(default_factory=list)
     headings: list[Heading] = field(default_factory=list)
     chunks: list[Chunk] = field(default_factory=list)
+    source_path: str | None = None
 
     def full_markdown(self) -> str:
         # 页码注释放在正文中，导出后仍能追溯 PDF 原页。
@@ -71,6 +72,19 @@ class SearchHit:
     score: int
     markdown: str
     truncated: bool
+    evidence_warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    document_id: str
+    page_number: int
+    image_path: str
+    cache_hit: bool
+    pixel_width: int
+    pixel_height: int
+    scale: float
+    clip: tuple[float, float, float, float] | None
 
 
 @dataclass(frozen=True)

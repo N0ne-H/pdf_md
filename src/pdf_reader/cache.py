@@ -60,6 +60,7 @@ class CacheStore:
             pages=[Page(**item) for item in data["pages"]],
             headings=[Heading(**item) for item in data["headings"]],
             chunks=[Chunk(**item) for item in data["chunks"]],
+            source_path=data.get("source_path"),
         )
 
     def save(self, document: Document) -> None:

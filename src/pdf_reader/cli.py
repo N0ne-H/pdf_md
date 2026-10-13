@@ -33,6 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("document_id")
     read.add_argument("chunk_id")
 
+    render = commands.add_parser("render-page", help="按原始页码渲染单页或局部 PNG")
+    render.add_argument("document_id")
+    render.add_argument("page_number", type=int)
+    render.add_argument("--scale", type=float, default=2.0)
+    render.add_argument("--clip", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"))
+    render.add_argument("--pdf", type=Path, help="旧缓存或原路径失效时提供原始 PDF")
+
     export = commands.add_parser("export", help="导出完整 Markdown")
     export.add_argument("document_id")
     export.add_argument("-o", "--output", type=Path, required=True)
@@ -61,9 +68,14 @@ def main(argv: list[str] | None = None) -> None:
             result = service.search(args.document_id, args.query, args.top_k, args.max_chars)
         elif args.command == "read":
             result = service.read(args.document_id, args.chunk_id)
+        elif args.command == "render-page":
+            result = service.render_page(
+                args.document_id, args.page_number, scale=args.scale,
+                clip=tuple(args.clip) if args.clip else None, pdf_path=args.pdf,
+            )
         else:
             result = {"output": str(service.export(args.document_id, args.output))}
-    except (ValueError, FileNotFoundError, KeyError) as exc:
+    except (ValueError, FileNotFoundError, KeyError, OSError) as exc:
         parser.exit(1, f"错误：{exc}\n")
 
     # dataclass 先转为普通字典，便于 CLI 和后续 Adapter 使用 JSON。
