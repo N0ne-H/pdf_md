@@ -2,5 +2,6 @@
 
 from .models import ParseConfig
 from .service import ReaderService
+from .reading import ReadingTracker
 
-__all__ = ["ParseConfig", "ReaderService"]
+__all__ = ["ParseConfig", "ReaderService", "ReadingTracker"]

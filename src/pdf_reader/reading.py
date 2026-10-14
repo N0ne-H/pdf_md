@@ -1,0 +1,289 @@
+"""只规划元数据，以成功返回事件计算阅读覆盖；图片查看来自外部工具回执。"""
+
+import json
+import re
+import uuid
+from dataclasses import asdict
+from pathlib import Path
+
+from .cache import CacheStore
+from .evidence import assess_evidence
+
+
+MODES = ("quick", "standard", "deep")
+IMAGE = re.compile(r"!\[[^]]*\]\(([^)]+)\)")
+APPENDIX = re.compile(r"appendix|appendices|supplement|附录|补充材料", re.I)
+REFERENCES = re.compile(r"(?:\*\*|^|\n)\s*(?:References|Bibliography|参考文献)\s*(?:\*\*|$|\n)", re.I)
+OVERVIEW = re.compile(r"abstract|introduction|contribution|result|conclusion|摘要|引言|贡献|结果|结论|总结|关于本", re.I)
+
+
+def inventory(document):
+    chunks = []
+    minimum_level = min((heading.level for heading in document.headings), default=0)
+    roots = [heading for heading in document.headings if heading.level == minimum_level]
+    title_root = roots[0].title if len(roots) == 1 and any(heading.level > minimum_level for heading in document.headings) else None
+    reference_section = None
+    after_references = False
+    for chunk in document.chunks:
+        role = "body"
+        if APPENDIX.search(chunk.section):
+            role = "appendix"
+        elif REFERENCES.search(chunk.markdown) or re.search(r"references|bibliography|参考文献", chunk.section, re.I):
+            reference_section = chunk.section
+            after_references = True
+            role = "references"
+        elif reference_section == chunk.section:
+            role = "references"
+        elif chunk.section.split(" / ")[-1].strip(" *`_").lower() in ("contents", "table of contents", "目录"):
+            role = "contents"
+        elif after_references:
+            role = "supplementary_after_references"
+        elif document.headings and (chunk.section == "(无标题)" or chunk.section == title_root):
+            role = "frontmatter"
+        assets = []
+        for index, match in enumerate(IMAGE.finditer(chunk.markdown), 1):
+            assets.append({"asset_id": f"{chunk.id}:image:{index}", "kind": "image_candidate", "source": match.group(1)})
+        rows = [line for line in chunk.markdown.splitlines() if line.startswith("|") and line.count("|") >= 4]
+        if len(rows) >= 3:
+            caption = re.search(r"(?:^|\n)\s*[*_]*(?:Table|表)\s*\d+", chunk.markdown, re.I)
+            assets.append({"asset_id": f"{chunk.id}:table", "kind": "table_candidate", "source": None,
+                           "numbered_caption": caption.group(0).strip(" * _\n") if caption else None})
+        if re.search(r"\$\$|\\\[|\\\(", chunk.markdown):
+            assets.append({"asset_id": f"{chunk.id}:math", "kind": "formula_text_candidate", "source": None})
+        chunks.append({"chunk_id": chunk.id, "page_number": chunk.page_number, "section": chunk.section,
+                       "characters": len(chunk.markdown), "role": role, "assets": assets,
+                       "evidence_warnings": assess_evidence(chunk.markdown, "")})
+    return chunks
+
+
+def select_chunks(metadata, mode):
+    if mode not in MODES:
+        raise ValueError(f"阅读模式必须为 {MODES}")
+    body = [item for item in metadata if item["role"] == "body"]
+    groups = {}
+    for item in body:
+        groups.setdefault(item["section"], []).append(item)
+    selected = set()
+    if mode == "deep":
+        selected = {item["chunk_id"] for item in metadata if item["role"] not in ("references", "contents")}
+    elif mode == "standard":
+        for items in groups.values():
+            # 不只返回短小的章节开头；取实质内容和末段，并保留图表证据。
+            selected.add(max(items, key=lambda item: item["characters"])["chunk_id"])
+            selected.add(items[-1]["chunk_id"])
+        selected.update(item["chunk_id"] for item in body if item["assets"])
+    else:
+        def major_title(item):
+            parts = item["section"].split(" / ")
+            return parts[1] if len(parts) > 1 else parts[0]
+
+        overview = [item for item in body if OVERVIEW.search(major_title(item))]
+        if overview and any(re.search(r"abstract|introduction|contribution|result|conclusion|摘要|引言|贡献|结果|结论|总结", major_title(item), re.I) for item in overview):
+            for section in dict.fromkeys(item["section"] for item in overview):
+                selected.update(item["chunk_id"] for item in overview if item["section"] == section)
+        else:
+            # 手册等没有摘要/结论的结构：按主要章节各取一个实质片段。
+            major = {}
+            for item in body:
+                key = " / ".join(item["section"].split(" / ")[:2])
+                major.setdefault(key, []).append(item)
+            selected.update(max(items, key=lambda item: item["characters"])["chunk_id"] for items in major.values())
+        selected.update(item["chunk_id"] for item in body if any(a.get("numbered_caption") for a in item["assets"]))
+        # 快速概览为有上限的抽样，摘要/结论优先，其次关键结果和开篇。
+        ranked = sorted((item for item in metadata if item["chunk_id"] in selected), key=lambda item: (
+            0 if re.search(r"abstract|conclusion|摘要|结论|总结", item["section"], re.I) else
+            1 if item["assets"] or re.search(r"result|结果", item["section"], re.I) else 2,
+            item["page_number"], item["chunk_id"],
+        ))
+        selected = {item["chunk_id"] for item in ranked[:10]}
+    if not selected and metadata:
+        selected = {metadata[0]["chunk_id"]}
+    return [item["chunk_id"] for item in metadata if item["chunk_id"] in selected]
+
+
+class ReadingTracker:
+    def __init__(self, cache: CacheStore):
+        self.cache = cache
+
+    def catalog(self, doc_id, offset=0, limit=50):
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("元数据 offset 必须非负，limit 必须为 1–100")
+        document = self.cache.load(doc_id)
+        metadata = inventory(document)
+        return {"document_id": doc_id, "total_chunks": len(metadata), "total_pages": len(document.pages),
+                "offset": offset, "next_offset": offset + limit if offset + limit < len(metadata) else None,
+                "chunks": metadata[offset:offset + limit]}
+
+    def _save(self, path, state):
+        path = Path(path).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def start(self, doc_id, mode="standard", record=None):
+        document = self.cache.load(doc_id)
+        metadata = inventory(document)
+        selected = select_chunks(metadata, mode)
+        path = Path(record or Path.cwd() / ".pdf_reader_readings" / f"{uuid.uuid4().hex}.json").resolve()
+        if path.exists():
+            raise ValueError(f"阅读记录已存在，不覆盖：{path}")
+        state = {"schema": 1, "reading_id": uuid.uuid4().hex, "document_id": doc_id, "mode": mode,
+                 "planned_chunk_ids": selected, "events": []}
+        state["coverage"] = self._status(path, state)
+        self._save(path, state)
+        return {"record_path": str(path), "document_id": doc_id, "mode": mode,
+                "total_chunks": len(metadata), "total_pages": len(document.pages),
+                "planned_chunk_ids": selected, "planned_chunks": len(selected),
+                "policy": "Quick: bounded overview; Standard: main sections and assets; Deep: all except bibliography and contents"}
+
+    def load(self, record, doc_id=None):
+        state = json.loads(Path(record).read_text(encoding="utf-8"))
+        if state.get("schema") != 1 or state.get("mode") not in MODES:
+            raise ValueError("无效的阅读记录")
+        if doc_id is not None and state["document_id"] != doc_id:
+            raise ValueError("阅读记录与文档 ID 不匹配")
+        self.cache.load(state["document_id"])
+        return state
+
+    def record(self, path, event):
+        state = self.load(path)
+        state["events"].append({"sequence": len(state["events"]) + 1, **event})
+        state["coverage"] = self._status(path, state)
+        self._save(path, state)
+
+    @staticmethod
+    def progress(state):
+        located, full, previews, gaps, views, renders = set(), set(), set(), {}, {}, []
+        for event in state["events"]:
+            located.update(event.get("located", []))
+            previews.update(event.get("truncated", []))
+            for chunk_id in event.get("full", []):
+                full.add(chunk_id)
+                gaps.pop(chunk_id, None)
+            if event["operation"] == "gap":
+                gaps[event["chunk_id"]] = event["reason"]
+                full.discard(event["chunk_id"])
+            if event["operation"] == "visual":
+                views[event["asset_id"]] = event
+            if event["operation"] == "render":
+                renders.append(event)
+        return located, full, previews, gaps, views, renders
+
+    def next_batch(self, record, max_chunks=5, max_chars=6000):
+        if not 1 <= max_chunks <= 20 or not 1 <= max_chars <= 20000:
+            raise ValueError("每批 max_chunks 必须为 1–20，max_chars 必须为 1–20000")
+        state = self.load(record)
+        document = self.cache.load(state["document_id"])
+        full = self.progress(state)[1]
+        remaining = [chunk for chunk in document.chunks if chunk.id in state["planned_chunk_ids"] and chunk.id not in full]
+        returned, budget, complete, truncated = [], max_chars, [], []
+        for chunk in remaining:
+            if len(returned) >= max_chunks:
+                break
+            if len(chunk.markdown) > budget and returned:
+                break
+            snippet = chunk.markdown[:budget]
+            cut = len(snippet) < len(chunk.markdown)
+            returned.append({**asdict(chunk), "truncated": cut, "evidence_warnings": assess_evidence(chunk.markdown, "")})
+            returned[-1]["markdown"] = snippet
+            (truncated if cut else complete).append(chunk.id)
+            budget -= len(snippet)
+            if cut:
+                break
+        event = {"operation": "read_batch", "located": complete + truncated, "full": complete, "truncated": truncated,
+                 "returned_characters": max_chars - budget}
+        return {"record_path": str(Path(record).resolve()), "document_id": document.id, "mode": state["mode"],
+                "chunks": returned, "remaining_planned_after_output": len(remaining) - len(complete),
+                "needs_full_read": truncated}, event
+
+    def gap(self, record, chunk_id, reason):
+        state = self.load(record)
+        if chunk_id not in {chunk.id for chunk in self.cache.load(state["document_id"]).chunks} or not reason.strip():
+            raise ValueError("缺口需要有效的片段 ID 和原因")
+        return {"operation": "gap", "chunk_id": chunk_id, "reason": reason}
+
+    def visual(self, record, asset_id, image_path=None, evidence=None, reason=None):
+        state = self.load(record)
+        document = self.cache.load(state["document_id"])
+        asset = next(((item, asset) for item in inventory(document) for asset in item["assets"]
+                      if asset["asset_id"] == asset_id), None)
+        if asset is None:
+            raise ValueError("找不到图表候选 ID")
+        if image_path is None:
+            if not reason or not reason.strip():
+                raise ValueError("未核验的图表必须说明原因")
+            return {"operation": "visual", "asset_id": asset_id, "status": "not_viewed", "reason": reason}
+        if not evidence or not evidence.strip():
+            raise ValueError("查看回执需要实际图像工具结果的 evidence 引用")
+        image = Path(image_path).resolve()
+        item, info = asset
+        expected = (self.cache.folder(document.id) / info["source"]).resolve() if info["source"] else None
+        renders = self.progress(state)[5]
+        allowed_render = any(Path(event["image_path"]).resolve() == image and event["page_number"] == item["page_number"] for event in renders)
+        if not image.is_file() or (image != expected and not allowed_render):
+            raise ValueError("图片来源不属于这个候选，或对应 render-page 尚未记录")
+        return {"operation": "visual", "asset_id": asset_id, "status": "viewed_reported",
+                "image_path": str(image), "evidence": evidence, "source": "external_tool_receipt_not_machine_authenticated"}
+
+    def _status(self, record, state):
+        document = self.cache.load(state["document_id"])
+        metadata = inventory(document)
+        located, full, previews, gaps, views, renders = self.progress(state)
+        pages = sorted({item["page_number"] for item in metadata if item["chunk_id"] in full})
+        empty_pages = [page.number for page in document.pages if not any(item["page_number"] == page.number for item in metadata)]
+        full_pages = [page.number for page in document.pages if page.number not in empty_pages and
+                      all(item["chunk_id"] in full for item in metadata if item["page_number"] == page.number)]
+        sections, stack = [], []
+        for heading in document.headings:
+            while stack and stack[-1][0] >= heading.level:
+                stack.pop()
+            stack.append((heading.level, heading.title))
+            path = " / ".join(title for _, title in stack)
+            members = [item for item in metadata if item["section"] == path or item["section"].startswith(path + " / ")]
+            count = sum(item["chunk_id"] in full for item in members)
+            sections.append({**asdict(heading), "section": path, "total_chunks": len(members), "read_chunks": count,
+                             "located_chunks": sum(item["chunk_id"] in located for item in members),
+                             "status": "no_extracted_chunks" if not members else "complete_text_returned" if count == len(members) else "partial" if count else "unread"})
+        assets = [{**asset, "chunk_id": item["chunk_id"], "page_number": item["page_number"],
+                   "status": views.get(asset["asset_id"], {}).get("status", "not_viewed"),
+                   "receipt": views.get(asset["asset_id"])} for item in metadata for asset in item["assets"]]
+        unread = [item for item in metadata if item["chunk_id"] not in full]
+        return {"record_path": str(Path(record).resolve()), "document_id": document.id, "mode": state["mode"],
+                "total_chunks": len(metadata), "read_chunk_ids": sorted(full), "located_chunk_ids": sorted(located),
+                "truncated_preview_chunk_ids": sorted(previews), "read_chunks": len(full),
+                "text_chunk_coverage_percent": round(100 * len(full) / len(metadata), 2) if metadata else 0,
+                "total_pages": len(document.pages), "covered_pages": pages, "fully_covered_pages": full_pages,
+                "pages_without_extracted_chunks": empty_pages, "sections": sections, "assets": assets,
+                "planned_chunks": len(state["planned_chunk_ids"]),
+                "remaining_planned_chunk_ids": [chunk_id for chunk_id in state["planned_chunk_ids"] if chunk_id not in full],
+                "plan_complete": set(state["planned_chunk_ids"]) <= full,
+                "complete_text_delivery": bool(metadata) and not unread and not empty_pages,
+                "unread_chunks": [{"chunk_id": item["chunk_id"], "page_number": item["page_number"], "section": item["section"],
+                                   "role": item["role"], "reason": gaps.get(item["chunk_id"], "not_yet_read" if item["chunk_id"] in state["planned_chunk_ids"] else "outside_mode_plan")} for item in unread],
+                "rendered_pages": renders, "event_count": len(state["events"]),
+                "coverage_basis": "Successfully output full CLI chunks, not cognitive understanding; external tool truncation must be logged as a gap. Visual receipts are external declarations, not authenticated by Core."}
+
+    def status(self, record, details=True):
+        result = self._status(record, self.load(record))
+        if details:
+            return result
+        groups = {}
+        for chunk in result["unread_chunks"]:
+            key = (chunk["role"], chunk["reason"])
+            group = groups.setdefault(key, {"role": key[0], "reason": key[1], "chunk_ids": [], "pages": []})
+            group["chunk_ids"].append(chunk["chunk_id"])
+            if chunk["page_number"] not in group["pages"]:
+                group["pages"].append(chunk["page_number"])
+        compact = {key: value for key, value in result.items() if key not in ("unread_chunks", "assets", "rendered_pages", "sections")}
+        compact["unread_groups"] = list(groups.values())
+        compact["sections"] = [{key: value for key, value in section.items() if key != "section"} for section in result["sections"]]
+        compact["visuals"] = {"candidate_count": len(result["assets"]),
+                              "viewed_reported_asset_ids": [asset["asset_id"] for asset in result["assets"] if asset["status"] == "viewed_reported"],
+                              "not_viewed_asset_ids": [asset["asset_id"] for asset in result["assets"] if asset["status"] != "viewed_reported"],
+                              "receipt_trust": "external_tool_receipt_not_machine_authenticated"}
+        compact["rendered_page_numbers"] = sorted({event["page_number"] for event in result["rendered_pages"]})
+        return compact
