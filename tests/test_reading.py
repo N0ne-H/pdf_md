@@ -59,6 +59,141 @@ def test_metadata_and_modes_do_not_return_markdown(reading):
     assert "c000009" not in scopes[2]
 
 
+def test_quick_retains_core_method_despite_many_overview_chunks(reading):
+    _, document, _ = reading
+    document.chunks = [Chunk(f"c{i:06d}", document.id, "Paper / Abstract", 1, "overview " * 30)
+                       for i in range(1, 13)] + [
+        Chunk("method", document.id, "Paper / Model Architecture / Encoder", 3, "encoder residual method"),
+        Chunk("result", document.id, "Paper / Results", 8, "experimental results"),
+        Chunk("limit", document.id, "Paper / Limitations", 9, "limited applicability"),
+        Chunk("end", document.id, "Paper / Conclusion", 10, "main conclusion"),
+    ]
+    quick = select_chunks(inventory(document), "quick")
+    assert {"method", "result", "limit", "end"} <= set(quick)
+    assert len(quick) < len(document.chunks)
+
+
+def test_summary_skips_repeated_headers_but_keeps_short_evidence(reading):
+    _, document, _ = reading
+    document.chunks[7:7] = [Chunk("header", document.id, "Paper / Method", 4, "Method  Paper  4"),
+                            Chunk("short", document.id, "Paper / Results", 5, "Accuracy: 93.0%.")]
+    metadata = inventory(document)
+    for mode in ("quick", "standard"):
+        assert "header" not in select_chunks(metadata, mode)
+        assert "short" in select_chunks(metadata, mode)
+    assert "header" in select_chunks(metadata, "deep")
+
+
+def test_standard_keeps_complete_method_and_results(reading):
+    _, document, _ = reading
+    document.chunks.insert(4, Chunk("middle", document.id, "Paper / Method", 3,
+                                    "essential assumptions and formula explanation"))
+    metadata = inventory(document)
+    standard = set(select_chunks(metadata, "standard"))
+    assert {item["chunk_id"] for item in metadata if item["section"] == "Paper / Method"} <= standard
+    assert set(select_chunks(metadata, "quick")) <= standard
+
+
+def test_quick_method_prefers_explanation_over_displaced_result_table(reading):
+    _, document, _ = reading
+    document.chunks[3:3] = [
+        Chunk("explanation", document.id, "Paper / Model / Embeddings", 3, "learned embeddings and shared weights"),
+        Chunk("displaced", document.id, "Paper / Model / Embeddings", 4,
+              "Table 1: unrelated comparison\n|a|b|c|\n|---|---|---|\n" + "|1|2|3|\n" * 20),
+    ]
+    quick = select_chunks(inventory(document), "quick")
+    assert "explanation" in quick and "displaced" not in quick
+    assert "displaced" in select_chunks(inventory(document), "standard")
+
+
+def test_short_numeric_and_symbol_evidence_is_not_formatting(reading):
+    _, document, _ = reading
+    document.chunks[3:3] = [Chunk("number", document.id, "Paper / Method", 3, "93.0"),
+                            Chunk("symbol", document.id, "Paper / Method", 3, "√(64) = 8"),
+                            Chunk("prose", document.id, "Paper / Method", 3, "Chapter 1 explains our new method")]
+    standard = select_chunks(inventory(document), "standard")
+    assert {"number", "symbol", "prose"} <= set(standard)
+
+
+@pytest.mark.parametrize("flags, expected", [
+    (["--pages", "3", "4"], ["c000004", "c000005", "c000006", "c000007"]),
+    (["--section", "Paper / Method"], ["c000004", "c000005", "c000006", "c000007"]),
+    (["--section", "Paper / Appendix A"], ["c000011", "c000012"]),
+    (["--scope", "body"], [f"c{i:06d}" for i in range(1, 9)]),
+    (["--scope", "all"], [f"c{i:06d}" for i in range(1, 13)]),
+])
+def test_explicit_deep_scope_plan_delivery_and_recovery(reading, capsys, flags, expected):
+    tracker, document, root = reading
+    record = root / "scope.json"
+    invoke(tracker, capsys, "reading-start", document.id, "--mode", "deep", "--record", record, *flags, "--compact")
+    state = tracker.load(record)
+    assert state["planned_chunk_ids"] == expected and state["scope"]
+    # Already delivered evidence must not be repeated by subsequent batches.
+    invoke(tracker, capsys, "read", document.id, expected[0], "--reading-record", record)
+    delivered = [expected[0]]
+    while not tracker.status(record)["plan_complete"]:
+        batch = invoke(tracker, capsys, "reading-next", record, "--compact")
+        delivered.extend(chunk["id"] for chunk in batch["chunks"])
+    assert delivered == expected
+    assert set(tracker.status(record)["read_chunk_ids"]) == set(expected)
+    invoke(tracker, capsys, "reading-gap", record, expected[0], "--reason", "external truncation")
+    batch = invoke(tracker, capsys, "reading-next", record, "--compact")
+    assert [chunk["id"] for chunk in batch["chunks"]] == [expected[0]]
+    assert tracker.status(record)["plan_complete"]
+    assert not tracker.status(record)["complete_text_delivery"]  # page 9 has no extracted text
+
+
+@pytest.mark.parametrize("flags", [
+    ["--mode", "quick", "--scope", "all"],
+    ["--mode", "deep", "--pages", "4", "3"],
+    ["--mode", "deep", "--pages", "1", "10"],
+    ["--mode", "deep", "--section", "Missing"],
+    ["--mode", "deep", "--pages", "1", "2", "--scope", "all"],
+])
+def test_invalid_deep_scope_does_not_create_record(reading, capsys, flags):
+    tracker, document, root = reading
+    record = root / "invalid.json"
+    with pytest.raises(SystemExit):
+        invoke(tracker, capsys, "reading-start", document.id, "--record", record, *flags)
+    assert not record.exists()
+
+
+def test_deep_section_includes_descendants_and_explicit_pages_keep_references(reading):
+    tracker, document, root = reading
+    document.chunks.insert(7, Chunk("child", document.id, "Paper / Method / Assumptions", 4, "short assumptions"))
+    tracker.cache.save(document)
+    result = tracker.start(document.id, "deep", root / "subtree.json", section="Paper / Method")
+    assert "child" in result["planned_chunk_ids"]
+    assert "c000008" not in result["planned_chunk_ids"]
+    reference = tracker.start(document.id, "deep", root / "references.json", pages=[6, 6])
+    assert reference["planned_chunk_ids"] == ["c000009", "c000010"]
+
+
+def test_legacy_record_resumes_without_scope_and_keeps_its_plan(reading):
+    tracker, document, root = reading
+    record = root / "old.json"
+    tracker.start(document.id, "deep", record)
+    state = tracker.load(record)
+    state.pop("scope", None)
+    state["planned_chunk_ids"] = ["c000004", "c000009"]
+    tracker._save(record, state)
+    batch, event = tracker.next_batch(record)
+    assert [chunk["id"] for chunk in batch["chunks"]] == state["planned_chunk_ids"]
+    tracker.record(record, event)
+    assert tracker.status(record)["plan_complete"]
+
+
+def test_skill_routes_local_detail_to_focused_and_documents_to_scoped_deep():
+    root = Path(__file__).resolve().parents[1] / "skills/pdf-reader"
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    reference = (root / "references/reading.md").read_text(encoding="utf-8")
+    assert "Focused" in skill and "sqrt(d_k)" in skill
+    assert "specific question stays Focused even when" in skill
+    assert "Ordinary knowledge questions without a specific PDF" in skill
+    assert "--scope all" in reference and "--pages" in reference and "--section" in reference
+    assert "Deep for complete reading, detailed analysis, or derivation" not in skill
+
+
 def test_search_located_is_not_full_read_and_duplicate_read_is_unique(reading, capsys):
     tracker, document, root = reading
     record = root / "session.json"

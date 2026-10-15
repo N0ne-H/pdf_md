@@ -57,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("document_id")
     start.add_argument("--mode", choices=MODES, default="standard")
     start.add_argument("--record", type=Path, help="阅读日志路径；默认存当前工作区 .pdf_reader_readings")
+    scope = start.add_mutually_exclusive_group()
+    scope.add_argument("--pages", type=int, nargs=2, metavar=("FIRST", "LAST"), help="Deep：完整覆盖原 PDF 页码范围（含首尾）")
+    scope.add_argument("--section", help="Deep：完整覆盖章节路径及其子章节；路径见 chunks")
+    scope.add_argument("--scope", choices=("body", "all"), help="Deep：仅正文或全部片段（含参考文献和目录）")
     batch = commands.add_parser("reading-next", help="返回下一批内容并记录成功输出")
     batch.add_argument("record", type=Path)
     batch.add_argument("--max-chunks", type=int, default=5)
@@ -148,7 +152,8 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "chunks":
             result = reading.catalog(args.document_id, args.offset, args.limit)
         elif args.command == "reading-start":
-            result = reading.start(args.document_id, args.mode, args.record)
+            result = reading.start(args.document_id, args.mode, args.record,
+                                   pages=args.pages, section=args.section, scope=args.scope)
         elif args.command == "reading-next":
             record = args.record
             result, event = reading.next_batch(record, args.max_chunks, args.max_chars)

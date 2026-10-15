@@ -15,6 +15,23 @@ IMAGE = re.compile(r"!\[[^]]*\]\(([^)]+)\)")
 APPENDIX = re.compile(r"appendix|appendices|supplement|附录|补充材料", re.I)
 REFERENCES = re.compile(r"(?:\*\*|^|\n)\s*(?:References|Bibliography|参考文献)\s*(?:\*\*|$|\n)", re.I)
 OVERVIEW = re.compile(r"abstract|introduction|contribution|result|conclusion|摘要|引言|贡献|结果|结论|总结|关于本", re.I)
+METHOD = re.compile(r"method|approach|architectur|model|attention|encoder|decoder|embedding|positional|feed.forward|方法|模型|架构|算法|机制", re.I)
+EVIDENCE = re.compile(r"experiment|result|evaluation|limitation|discussion|实验|结果|评估|局限|讨论", re.I)
+
+
+def substantive(chunk):
+    # 仅剔除能由本块章节名和页码完整解释的页眉/页脚，不按长度丢弃短公式或数值。
+    text = re.sub(r"(?m)^\s*CHAPTER\s+[A-Z0-9 .]+\s*$", "", chunk.markdown)
+    if not text.strip():
+        return False
+    normalize = lambda value: re.sub(r"[\W\d_]+", "", value).casefold()
+    text = normalize(text)
+    if not text:
+        return True  # 纯数值/符号也可能是证据，不按字符类型过滤。
+    for title in sorted(chunk.section.split(" / "), key=len, reverse=True):
+        if normalize(title):
+            text = text.replace(normalize(title), "", 1)
+    return bool(text)
 
 
 def inventory(document):
@@ -52,6 +69,7 @@ def inventory(document):
             assets.append({"asset_id": f"{chunk.id}:math", "kind": "formula_text_candidate", "source": None})
         chunks.append({"chunk_id": chunk.id, "page_number": chunk.page_number, "section": chunk.section,
                        "characters": len(chunk.markdown), "role": role, "assets": assets,
+                       "substantive": bool(assets) or substantive(chunk),
                        "evidence_warnings": assess_evidence(chunk.markdown, "")})
     return chunks
 
@@ -59,7 +77,7 @@ def inventory(document):
 def select_chunks(metadata, mode):
     if mode not in MODES:
         raise ValueError(f"阅读模式必须为 {MODES}")
-    body = [item for item in metadata if item["role"] == "body"]
+    body = [item for item in metadata if item["role"] == "body" and item.get("substantive", True)]
     groups = {}
     for item in body:
         groups.setdefault(item["section"], []).append(item)
@@ -68,19 +86,28 @@ def select_chunks(metadata, mode):
         selected = {item["chunk_id"] for item in metadata if item["role"] not in ("references", "contents")}
     elif mode == "standard":
         for items in groups.values():
-            # 不只返回短小的章节开头；取实质内容和末段，并保留图表证据。
-            selected.add(max(items, key=lambda item: item["characters"])["chunk_id"])
-            selected.add(items[-1]["chunk_id"])
+            label = " / ".join(items[0]["section"].split(" / ")[1:]) or items[0]["section"]
+            if METHOD.search(label) or EVIDENCE.search(label):
+                selected.update(item["chunk_id"] for item in items)
+            else:
+                selected.add(max(items, key=lambda item: item["characters"])["chunk_id"])
+                selected.add(items[-1]["chunk_id"])
         selected.update(item["chunk_id"] for item in body if item["assets"])
+        selected.update(select_chunks(metadata, "quick"))
     else:
         def major_title(item):
             parts = item["section"].split(" / ")
             return parts[1] if len(parts) > 1 else parts[0]
 
-        overview = [item for item in body if OVERVIEW.search(major_title(item))]
-        if overview and any(re.search(r"abstract|introduction|contribution|result|conclusion|摘要|引言|贡献|结果|结论|总结", major_title(item), re.I) for item in overview):
-            for section in dict.fromkeys(item["section"] for item in overview):
-                selected.update(item["chunk_id"] for item in overview if item["section"] == section)
+        if any(re.search(r"abstract|introduction|contribution|conclusion|摘要|引言|贡献|结论", major_title(item), re.I) for item in body):
+            for section, items in groups.items():
+                label = " / ".join(section.split(" / ")[1:]) or section
+                if OVERVIEW.search(label) or METHOD.search(label) or EVIDENCE.search(label):
+                    # 分页表格可能沿用上节标题，方法概览优先保留该节的解释正文。
+                    candidates = [item for item in items if not any(a.get("numbered_caption") for a in item["assets"])]
+                    if not METHOD.search(label) or EVIDENCE.search(label) or not candidates:
+                        candidates = items
+                    selected.add(max(candidates, key=lambda item: item["characters"])["chunk_id"])
         else:
             # 手册等没有摘要/结论的结构：按主要章节各取一个实质片段。
             major = {}
@@ -88,14 +115,7 @@ def select_chunks(metadata, mode):
                 key = " / ".join(item["section"].split(" / ")[:2])
                 major.setdefault(key, []).append(item)
             selected.update(max(items, key=lambda item: item["characters"])["chunk_id"] for items in major.values())
-        selected.update(item["chunk_id"] for item in body if any(a.get("numbered_caption") for a in item["assets"]))
-        # 快速概览为有上限的抽样，摘要/结论优先，其次关键结果和开篇。
-        ranked = sorted((item for item in metadata if item["chunk_id"] in selected), key=lambda item: (
-            0 if re.search(r"abstract|conclusion|摘要|结论|总结", item["section"], re.I) else
-            1 if item["assets"] or re.search(r"result|结果", item["section"], re.I) else 2,
-            item["page_number"], item["chunk_id"],
-        ))
-        selected = {item["chunk_id"] for item in ranked[:10]}
+        # 每个相关章节只取一个实质片段；不让固定前十块挤掉核心方法。
     if not selected and metadata:
         selected = {metadata[0]["chunk_id"]}
     return [item["chunk_id"] for item in metadata if item["chunk_id"] in selected]
@@ -124,21 +144,49 @@ class ReadingTracker:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def start(self, doc_id, mode="standard", record=None):
+    def start(self, doc_id, mode="standard", record=None, *, pages=None, section=None, scope=None):
         document = self.cache.load(doc_id)
         metadata = inventory(document)
+        explicit = pages is not None or section is not None or scope is not None
+        if explicit and mode != "deep":
+            raise ValueError("显式范围仅用于 Deep；具体问题优先 search/read")
+        if sum(value is not None for value in (pages, section, scope)) > 1:
+            raise ValueError("pages、section、scope 只能选择一种")
         selected = select_chunks(metadata, mode)
+        requested = None
+        if pages is not None:
+            first, last = pages
+            if not 1 <= first <= last <= len(document.pages):
+                raise ValueError("页码范围必须在原 PDF 页数内且起点不大于终点")
+            selected = [item["chunk_id"] for item in metadata if first <= item["page_number"] <= last]
+            requested = {"pages": [first, last]}
+        elif section is not None:
+            selected = [item["chunk_id"] for item in metadata
+                        if item["section"] == section or item["section"].startswith(section + " / ")]
+            if not selected:
+                raise ValueError("章节范围没有匹配片段；请从 outline/chunks 核对完整章节路径")
+            requested = {"section": section}
+        elif scope is not None:
+            if scope not in ("body", "all"):
+                raise ValueError("scope 必须为 body 或 all")
+            selected = [item["chunk_id"] for item in metadata if scope == "all" or item["role"] == "body"]
+            requested = {"scope": scope}
         path = Path(record or Path.cwd() / ".pdf_reader_readings" / f"{uuid.uuid4().hex}.json").resolve()
         if path.exists():
             raise ValueError(f"阅读记录已存在，不覆盖：{path}")
         state = {"schema": 1, "reading_id": uuid.uuid4().hex, "document_id": doc_id, "mode": mode,
                  "planned_chunk_ids": selected, "events": []}
+        if requested is not None:
+            state["scope"] = requested
         state["coverage"] = self._status(path, state)
         self._save(path, state)
         return {"record_path": str(path), "document_id": doc_id, "mode": mode,
                 "total_chunks": len(metadata), "total_pages": len(document.pages),
                 "planned_chunk_ids": selected, "planned_chunks": len(selected),
-                "policy": "Quick: bounded overview; Standard: main sections and assets; Deep: all except bibliography and contents"}
+                **({"scope": requested} if requested is not None else {}),
+                "policy": {"quick": "Section evidence representatives; supplement missing task evidence",
+                           "standard": "Main methods/results, body assets and substantive section representatives",
+                           "deep": "Explicit scope or all except bibliography/contents"}[mode]}
 
     def load(self, record, doc_id=None):
         state = json.loads(Path(record).read_text(encoding="utf-8"))
@@ -254,6 +302,7 @@ class ReadingTracker:
         unread = [item for item in metadata if item["chunk_id"] not in full]
         return {"record_path": str(Path(record).resolve()), "document_id": document.id, "mode": state["mode"],
                 "total_chunks": len(metadata), "read_chunk_ids": sorted(full), "located_chunk_ids": sorted(located),
+                **({"scope": state["scope"]} if "scope" in state else {}),
                 "truncated_preview_chunk_ids": sorted(previews), "read_chunks": len(full),
                 "text_chunk_coverage_percent": round(100 * len(full) / len(metadata), 2) if metadata else 0,
                 "total_pages": len(document.pages), "covered_pages": pages, "fully_covered_pages": full_pages,
