@@ -214,3 +214,76 @@ def test_quick_manual_samples_chapters_despite_incidental_summary_heading(readin
         Chunk("c4", document.id, "Manual / 3 Publish", 3, "publish details " * 30),
     ]
     assert select_chunks(inventory(document), "quick") == ["c1", "c3", "c4"]
+
+
+def test_compact_batches_preserve_delivery_events_and_recovery(reading, capsys):
+    tracker, document, root = reading
+    records = [root / "legacy.json", root / "compact.json"]
+    starts = [invoke(tracker, capsys, "reading-start", document.id, "--mode", "deep", "--record", record,
+                     *(["--compact"] if index else [])) for index, record in enumerate(records)]
+    assert starts[1]["planned_chunks"] == starts[0]["planned_chunks"]
+    assert "planned_chunk_ids" not in starts[1]
+    for budget in (20, 1000):
+        batches = [invoke(tracker, capsys, "reading-next", record, "--max-chars", budget,
+                          *(["--compact"] if index else [])) for index, record in enumerate(records)]
+        expected = [{key: value for key, value in chunk.items() if key != "document_id"}
+                    for chunk in batches[0]["chunks"]]
+        assert batches[1]["chunks"] == expected
+        for key in ("remaining_planned_after_output", "needs_full_read"):
+            assert batches[1][key] == batches[0][key]
+        states = [tracker.load(record) for record in records]
+        assert states[0]["events"] == states[1]["events"]
+        assert len(json.dumps(batches[1])) < len(json.dumps(batches[0]))
+
+
+def test_compact_status_keeps_gaps_sections_and_visual_disclosure(reading, capsys):
+    tracker, document, root = reading
+    record = root / "compact.json"
+    invoke(tracker, capsys, "reading-start", document.id, "--mode", "deep", "--record", record)
+    invoke(tracker, capsys, "reading-next", record)
+    invoke(tracker, capsys, "reading-gap", record, "c000001", "--reason", "external truncation")
+    compact = invoke(tracker, capsys, "reading-status", record, "--compact")
+    detailed = invoke(tracker, capsys, "reading-status", record, "--details", "--compact")
+    for key in ("read_chunks", "covered_pages", "fully_covered_pages", "plan_complete",
+                "complete_text_delivery", "pages_without_extracted_chunks", "coverage_basis"):
+        assert compact[key] == detailed[key]
+    assert compact["remaining_planned_chunks"] == len(detailed["remaining_planned_chunk_ids"])
+    assert any(group["reason"] == "external truncation" and group["chunks"] == 1 for group in compact["unread_groups"])
+    assert sum(compact["section_states"].values()) == len(detailed["sections"])
+    assert all(section["status"] != "complete_text_returned" for section in compact["sections"])
+    assert compact["visuals"]["not_viewed_count"] == len(detailed["assets"])
+    assert "not_machine_authenticated" in compact["visuals"]["receipt_trust"]
+    assert detailed["read_chunk_ids"] and "read_chunk_ids" not in compact
+    assert len(json.dumps(compact)) < len(json.dumps(detailed))
+
+
+def test_batch_is_flushed_before_event_commit(reading, capsys, monkeypatch):
+    tracker, document, root = reading
+    record = root / "order.json"
+    tracker.start(document.id, mode="deep", record=record)
+    import builtins
+    original_print = builtins.print
+    observed = []
+    def checked_print(*args, **kwargs):
+        assert kwargs.get("flush") is True
+        assert tracker.status(record)["event_count"] == 0
+        observed.extend(chunk["id"] for chunk in json.loads(args[0])["chunks"])
+        original_print(*args, **kwargs)
+    monkeypatch.setattr("builtins.print", checked_print)
+    invoke(tracker, capsys, "reading-next", record)
+    assert tracker.load(record)["events"][0]["full"] == observed
+
+
+def test_failed_flush_does_not_commit_batch(reading, monkeypatch):
+    tracker, document, root = reading
+    record = root / "flush-failure.json"
+    tracker.start(document.id, record=record)
+    class FailingFlush:
+        def write(self, text):
+            return len(text)
+        def flush(self):
+            raise BrokenPipeError("flush unavailable")
+    monkeypatch.setattr("pdf_reader.cli.sys.stdout", FailingFlush())
+    with pytest.raises(BrokenPipeError, match="flush unavailable"):
+        main(["--cache-dir", str(tracker.cache.root), "reading-next", str(record)])
+    assert tracker.status(record)["event_count"] == 0

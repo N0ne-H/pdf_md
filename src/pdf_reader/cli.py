@@ -75,7 +75,36 @@ def build_parser() -> argparse.ArgumentParser:
     visual_source.add_argument("--image", type=Path)
     visual_source.add_argument("--reason")
     visual.add_argument("--evidence", help="实际图像工具结果引用；Core 不认证外部调用")
+    for command in (start, batch, status):
+        command.add_argument("--compact", action="store_true", help="减少重复元数据及 JSON 空白；不减少正文或日志")
     return parser
+
+
+def compact_reading_response(command, result):
+    result = dict(result)
+    if command == "reading-start":
+        result.pop("planned_chunk_ids")
+    elif command == "reading-next":
+        result["chunks"] = [{key: value for key, value in chunk.items() if key != "document_id"}
+                            for chunk in result["chunks"]]
+    elif command == "reading-status":
+        for source, count in (("read_chunk_ids", "read_chunks"), ("located_chunk_ids", "located_chunks"),
+                              ("truncated_preview_chunk_ids", "truncated_preview_chunks"),
+                              ("remaining_planned_chunk_ids", "remaining_planned_chunks")):
+            result[count] = len(result.pop(source))
+        states = {}
+        for section in result["sections"]:
+            states[section["status"]] = states.get(section["status"], 0) + 1
+        result["section_states"] = states
+        result["sections"] = [section for section in result["sections"] if section["status"] != "complete_text_returned"]
+        result["unread_groups"] = [{key: value for key, value in group.items() if key != "chunk_ids"} |
+                                   {"chunks": len(group["chunk_ids"])} for group in result["unread_groups"]]
+        visuals = result["visuals"]
+        result["visuals"] = {"candidate_count": visuals["candidate_count"],
+                             "viewed_reported_count": len(visuals["viewed_reported_asset_ids"]),
+                             "not_viewed_count": len(visuals["not_viewed_asset_ids"]),
+                             "receipt_trust": visuals["receipt_trust"]}
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -147,7 +176,11 @@ def main(argv: list[str] | None = None) -> None:
             for key, value in result.items()
         }
     # 先成功输出，再提交返回事件；输出失败不能虚增完整阅读计数。
-    print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
+    compact = getattr(args, "compact", False)
+    if compact and not getattr(args, "details", False):
+        result = compact_reading_response(args.command, result)
+    print(json.dumps(result, ensure_ascii=False, indent=None if compact else 2,
+                     separators=(",", ":") if compact else None), flush=True)
     if record is not None and event is not None:
         try:
             reading.record(record, event)
