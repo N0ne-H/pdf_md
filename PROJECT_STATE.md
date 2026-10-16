@@ -139,8 +139,8 @@
 
 - 交接编号：PH-20261016-441；源任务：01a13fde-a2c9-74e3-af01-41a3aadab0f7。
 - 用户明确调用project-handoff要求“创建新对话4.4.1”，授权保存、同一项目原目录创建并打开、只读核对后接续。工作目录：`D:\大学学习\大二上\codex`；项目ID：d829174b-622a-45fc-8b60-7ad4a1e8bf92，local。未指定模型，不覆盖默认设置。
-- 接手任务编号：01a14497-480f-7590-bb23-536007bf1b2c（local，同一项目原目录）；交接状态：已接手。只读核验后已收到修改权。用户已验收4.4.2，并明确授权4.4.3；当前4.4.3实现、84项pytest、原Conda重装和全局验证已完成，等待用户验收。源任务只观察；无本轮后台测试或代理待接管。
-- 当前分支main，HEAD `33ff362e155d16720cecc9ad4df8274205fdba86`（4.4.2 2 个真实 Codex 问题的轻量测试）。4.4.3开始工作区干净，当前实现/测试/报告/状态改动未提交；本任务未执行提交/推送。交接初始84aaf15、上方8868449和阶段正文里的旧HEAD为历史快照。
+- 接手任务编号：01a14497-480f-7590-bb23-536007bf1b2c（local，同一项目原目录）；交接状态：已接手。用户已验收4.4.1/4.4.2/4.4.3并授权v4.4稳定收尾及本地Git保存；完整基线84项通过。当前只做发布文档和版本保存，不启动5.0；无后台任务待接管。
+- 当前分支main；稳定收尾前HEAD `5758e532fd615e491efee4887cf4fbf4358ab693`（4.4.3），三轮实现已在历史中。稳定发布提交以本地`v4.4^{commit}`定位，本轮授权创建发布收尾提交及注释标签，不推送。交接初始84aaf15和各阶段旧HEAD/未提交说明为历史快照。
 
 ### 权威成果与真实结论
 
@@ -193,6 +193,14 @@
 - 5新增Lean案例先红灯，阅读专项50 passed；完整pytest **84 passed in 61.24s**，含默认Deep/all、截断/gap、补读、flush失败及Windows PNG并发。原Conda按既有非editable/no-deps/no-build-isolation方式重装，备份并同步全局Skill；安装所有Core及Skill/reference/launcher逐字匹配，项目外固定入口23次调用通过，pip check无冲突。
 - 报告`docs/2026-10-17-pdf-reader-4.4.3-management-overhead.md`；计划`docs/superpowers/plans/2026-10-17-pdf-reader-4.4.3-management-output.md`；证据`output/reading-4.4.3/`（before/after分阶段metrics、comparison.json、pytest-release.txt、global-validation.json等）。原证据不清理，安装build已归档到本轮install-build。
 - 仍有完整长章节路径、JSON包装和按需完整审计开销；持久化coverage计算/日志体积未优化。公式/表格/语义可靠性仍需原有核验。建议用户验收本轮后正式结束4.4，不为固定Token比例扩大范围。当前停止等待确认，无提交推送、无Agent矩阵、无旧4.3.1补测、不自动进入5.0。
+### v4.4稳定版本收尾（2026-10-17）
+
+- 用户已验收4.4.1/4.4.2/4.4.3，授权文档整理与本地稳定提交、v4.4标签，明确不推送、不开发新功能或进入5.0。开始时main/5758e53、工作区干净、无v4.4同名标签。
+- 仅更新README、发布报告及本状态；Core/Skill/测试/包元数据不变。README涵盖架构、四种阅读方式、Compact/Lean、视觉核验、缓存/日志/上下文区别、恢复和全部已知限制。v4.4是Git标签，分发包仍0.1.0。
+- 复用84 passed in 61.24s及4.4.3安装证据；本轮12次帮助/Focused/Quick/Standard/Deep固定入口轻量调用通过，安装全部Core和全局Skill/reference/launcher与项目一致，pip check无冲突。未重跑大矩阵，4.3.1仍9/12。
+- 发布报告：`docs/2026-10-17-pdf-reader-v4.4-release.md`；轻量原始证据：`output/release-v4.4/validation.json`。暂存与本地保存仅限上述三份文档；不提交论文、缓存、日志、大型输出或新增个人环境信息。
+- 本地发布提交与标签以Git实际引用为准，可用`git log -1 v4.4`和`git rev-parse 'v4.4^{commit}'`核对。Git保存代码/Skill/测试/文档；原始PDF和本地证据继续在本机保留，不由标签携带。未来开发可从该标签新建分支，恢复原日志需保留相应本地缓存。
+- 本轮结束后停止，后续5.0仅列候选方向，未经新授权不执行。
 <!-- PDFREADER-HANDOFF-END PH-20261016-441 -->
 
 
