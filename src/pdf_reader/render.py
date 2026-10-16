@@ -3,12 +3,40 @@
 import hashlib
 import json
 import math
+import os
 import uuid
 from pathlib import Path
 
 import pymupdf
 
 from .models import RenderResult
+
+
+def _read_png(path):
+    if os.name != "nt":
+        return path.read_bytes()
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    # CRT open 不共享 DELETE，会与尚持有 DELETE 权限的发布句柄冲突。
+    # 只请求读权限；共享读/写/删除不绕过 ACL，也不修改已发布的 PNG。
+    handle = kernel.CreateFileW(str(path), 0x80000000, 7, None, 3, 0x80, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except OSError:
+        kernel.CloseHandle(handle)
+        raise
+    # open_osfhandle 接管句柄，stream 关闭时一起释放。
+    with os.fdopen(descriptor, "rb") as stream:
+        return stream.read()
 
 
 def render_pdf_page(
@@ -39,7 +67,7 @@ def render_pdf_page(
         output = folder / f"page-{page_number:04d}-{suffix}.png"
         if output.is_file():
             try:
-                image = pymupdf.Pixmap(output.read_bytes())
+                image = pymupdf.Pixmap(_read_png(output))
             except (RuntimeError, OSError, pymupdf.mupdf.FzErrorBase) as exc:
                 raise OSError(f"缓存的页面图片无法访问：{output}") from exc
             return RenderResult(doc_id, page_number, str(output), True, image.width, image.height, scale, clip)
@@ -52,13 +80,17 @@ def render_pdf_page(
             with temporary.open("xb") as destination:
                 destination.write(image.tobytes("png"))
             try:
-                temporary.replace(output)
+                # Windows 下首个完整 PNG 胜出；不替换已发布文件，避免与读者争抢删除共享权。
+                if os.name == "nt":
+                    temporary.rename(output)
+                else:
+                    temporary.replace(output)
             except (PermissionError, FileExistsError) as publish_error:
-                # Windows 读者可阻止替换；另一个请求已完成时安全复用它。
+                # 另一个请求已完成同一目标时，校验并复用胜出文件。
                 if not output.is_file():
                     raise
                 try:
-                    cached = pymupdf.Pixmap(output.read_bytes())
+                    cached = pymupdf.Pixmap(_read_png(output))
                 except (RuntimeError, OSError, pymupdf.mupdf.FzErrorBase):
                     raise publish_error
                 if (cached.width, cached.height) != (image.width, image.height):
