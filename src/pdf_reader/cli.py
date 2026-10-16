@@ -80,7 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
     visual_source.add_argument("--reason")
     visual.add_argument("--evidence", help="实际图像工具结果引用；Core 不认证外部调用")
     for command in (start, batch, status):
-        command.add_argument("--compact", action="store_true", help="减少重复元数据及 JSON 空白；不减少正文或日志")
+        output = command.add_mutually_exclusive_group()
+        output.add_argument("--compact", action="store_true", help="减少重复元数据及 JSON 空白；不减少正文或日志")
+        output.add_argument("--lean", action="store_true", help="轻量阅读响应；保留正文及活动缺口，完整状态用 --details")
     return parser
 
 
@@ -109,6 +111,36 @@ def compact_reading_response(command, result):
                              "not_viewed_count": len(visuals["not_viewed_asset_ids"]),
                              "receipt_trust": visuals["receipt_trust"]}
     return result
+
+
+def lean_reading_response(command, result, state=None):
+    if command == "reading-start":
+        return {key: value for key, value in result.items() if key not in ("planned_chunk_ids", "policy")}
+    if command == "reading-next":
+        return {"chunks": [{key: value for key, value in chunk.items() if key != "document_id"}
+                           for chunk in result["chunks"]],
+                "remaining_planned_after_output": result["remaining_planned_after_output"],
+                "needs_full_read": result["needs_full_read"]}
+    planned = set(state["planned_chunk_ids"])
+    full = set(result["read_chunk_ids"])
+    gaps = ReadingTracker.progress(state)[3]
+    unread = {chunk["chunk_id"]: chunk for chunk in result["unread_chunks"]}
+    visuals = [asset for asset in result["assets"] if asset["chunk_id"] in planned]
+    viewed = sum(asset["status"] == "viewed_reported" for asset in visuals)
+    return {**{key: result[key] for key in ("record_path", "document_id", "mode", "planned_chunks",
+                "read_chunks", "plan_complete", "complete_text_delivery", "covered_pages",
+                "pages_without_extracted_chunks", "event_count")},
+            **({"scope": result["scope"]} if "scope" in result else {}),
+            "read_planned_chunks": len(planned & full),
+            "remaining_planned_chunks": len(planned - full),
+            "document_unread_chunks": len(unread),
+            "unread_outside_plan_chunks": sum(chunk_id not in planned for chunk_id in unread),
+            "needs_full_read": [chunk_id for chunk_id in result["truncated_preview_chunk_ids"] if chunk_id not in full],
+            "gaps": [{"chunk_id": chunk_id, "page_number": unread[chunk_id]["page_number"], "reason": reason}
+                     for chunk_id, reason in gaps.items()],
+            "planned_visuals": {"candidate_count": len(visuals), "viewed_reported_count": viewed,
+                                "not_viewed_count": len(visuals) - viewed,
+                                "receipt_trust": "external_tool_receipt_not_machine_authenticated"}}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -158,7 +190,7 @@ def main(argv: list[str] | None = None) -> None:
             record = args.record
             result, event = reading.next_batch(record, args.max_chunks, args.max_chars)
         elif args.command == "reading-status":
-            result = reading.status(args.record, details=args.details)
+            result = reading.status(args.record, details=args.details or args.lean)
         elif args.command == "reading-gap":
             record = args.record
             event = reading.gap(record, args.chunk_id, args.reason)
@@ -182,10 +214,14 @@ def main(argv: list[str] | None = None) -> None:
         }
     # 先成功输出，再提交返回事件；输出失败不能虚增完整阅读计数。
     compact = getattr(args, "compact", False)
-    if compact and not getattr(args, "details", False):
+    lean = getattr(args, "lean", False)
+    if lean and not getattr(args, "details", False):
+        state = reading.load(args.record) if args.command == "reading-status" else None
+        result = lean_reading_response(args.command, result, state)
+    elif compact and not getattr(args, "details", False):
         result = compact_reading_response(args.command, result)
-    print(json.dumps(result, ensure_ascii=False, indent=None if compact else 2,
-                     separators=(",", ":") if compact else None), flush=True)
+    print(json.dumps(result, ensure_ascii=False, indent=None if compact or lean else 2,
+                     separators=(",", ":") if compact or lean else None), flush=True)
     if record is not None and event is not None:
         try:
             reading.record(record, event)

@@ -555,3 +555,87 @@ def test_failed_flush_does_not_commit_batch(reading, monkeypatch):
     with pytest.raises(BrokenPipeError, match="flush unavailable"):
         main(["--cache-dir", str(tracker.cache.root), "reading-next", str(record)])
     assert tracker.status(record)["event_count"] == 0
+
+
+def test_lean_preserves_chunk_evidence_events_and_full_audit(reading, capsys):
+    tracker, document, root = reading
+    records = [root / "json.json", root / "lean.json"]
+    for record, flags in zip(records, [[], ["--lean"]]):
+        started = invoke(tracker, capsys, "reading-start", document.id, "--mode", "deep",
+                         "--pages", 3, 4, "--record", record, *flags)
+        assert started["scope"] == {"pages": [3, 4]}
+    while True:
+        ordinary = invoke(tracker, capsys, "reading-next", records[0], "--max-chunks", 2)
+        lean = invoke(tracker, capsys, "reading-next", records[1], "--max-chunks", 2, "--lean")
+        assert lean["chunks"] == [{k: v for k, v in c.items() if k != "document_id"} for c in ordinary["chunks"]]
+        assert lean["needs_full_read"] == ordinary["needs_full_read"]
+        assert lean["remaining_planned_after_output"] == ordinary["remaining_planned_after_output"]
+        assert "record_path" not in lean and "document_id" not in lean
+        assert tracker.load(records[0])["events"] == tracker.load(records[1])["events"]
+        if not ordinary["remaining_planned_after_output"]:
+            break
+    lean = invoke(tracker, capsys, "reading-status", records[1], "--lean")
+    detailed = invoke(tracker, capsys, "reading-status", records[1], "--details", "--lean")
+    legacy_detail = invoke(tracker, capsys, "reading-status", records[1], "--details", "--compact")
+    assert detailed == legacy_detail == tracker.load(records[1])["coverage"]
+    assert lean["plan_complete"] and not lean["complete_text_delivery"]
+    assert lean["read_planned_chunks"] == lean["planned_chunks"]
+    assert lean["remaining_planned_chunks"] == 0
+    assert lean["document_unread_chunks"] == lean["unread_outside_plan_chunks"] > 0
+    assert "sections" not in lean
+    assert lean["planned_visuals"]["not_viewed_count"] > 0
+    assert "not_machine_authenticated" in lean["planned_visuals"]["receipt_trust"]
+
+
+def test_lean_keeps_active_gaps_truncation_and_outside_plan_supplements(reading, capsys):
+    tracker, document, root = reading
+    record = root / "old-record.json"
+    # Existing schema-1 record predating --lean remains usable.
+    tracker.start(document.id, "deep", record, pages=[3, 4])
+    preview = invoke(tracker, capsys, "reading-next", record, "--max-chars", 20, "--lean")
+    missing = preview["needs_full_read"][0]
+    status = invoke(tracker, capsys, "reading-status", record, "--lean")
+    assert status["needs_full_read"] == [missing] and not status["plan_complete"]
+    invoke(tracker, capsys, "read", document.id, missing, "--reading-record", record)
+    invoke(tracker, capsys, "read", document.id, "c000008", "--reading-record", record)
+    status = invoke(tracker, capsys, "reading-status", record, "--lean")
+    assert status["needs_full_read"] == []
+    assert status["read_chunks"] == 2 and status["read_planned_chunks"] == 1
+    # An arbitrary reason matching a normal omission label must still be an explicit gap.
+    invoke(tracker, capsys, "reading-gap", record, missing, "--reason", "outside_mode_plan")
+    status = invoke(tracker, capsys, "reading-status", record, "--lean")
+    assert status["gaps"] == [{"chunk_id": missing, "page_number": 3, "reason": "outside_mode_plan"}]
+    assert status["remaining_planned_chunks"] == 4
+    invoke(tracker, capsys, "read", document.id, missing, "--reading-record", record)
+    assert invoke(tracker, capsys, "reading-status", record, "--lean")["gaps"] == []
+
+
+@pytest.mark.parametrize("scope", [[], ["--scope", "all"]])
+def test_lean_default_deep_and_all_keep_original_plan(reading, capsys, scope):
+    tracker, document, root = reading
+    record = root / "deep.json"
+    invoke(tracker, capsys, "reading-start", document.id, "--mode", "deep", "--record", record, *scope, "--lean")
+    expected = [c.id for c in document.chunks] if scope else select_chunks(inventory(document), "deep")
+    assert tracker.load(record)["planned_chunk_ids"] == expected
+    while invoke(tracker, capsys, "reading-next", record, "--lean")["remaining_planned_after_output"]:
+        pass
+    assert tracker.status(record)["read_chunk_ids"] == sorted(expected)
+
+
+def test_lean_output_failure_does_not_commit_and_formats_are_exclusive(reading, capsys, monkeypatch):
+    tracker, document, root = reading
+    record = root / "failure.json"
+    tracker.start(document.id, record=record)
+    class FailingFlush:
+        def write(self, text):
+            return len(text)
+        def flush(self):
+            raise BrokenPipeError("lean flush unavailable")
+    with monkeypatch.context() as patch:
+        patch.setattr("pdf_reader.cli.sys.stdout", FailingFlush())
+        with pytest.raises(BrokenPipeError, match="lean flush unavailable"):
+            main(["--cache-dir", str(tracker.cache.root), "reading-next", str(record), "--lean"])
+    assert tracker.status(record)["event_count"] == 0
+    with pytest.raises(SystemExit) as exc:
+        invoke(tracker, capsys, "reading-status", record, "--compact", "--lean")
+    assert exc.value.code == 2

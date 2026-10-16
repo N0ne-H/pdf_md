@@ -139,8 +139,8 @@
 
 - 交接编号：PH-20261016-441；源任务：01a13fde-a2c9-74e3-af01-41a3aadab0f7。
 - 用户明确调用project-handoff要求“创建新对话4.4.1”，授权保存、同一项目原目录创建并打开、只读核对后接续。工作目录：`D:\大学学习\大二上\codex`；项目ID：d829174b-622a-45fc-8b60-7ad4a1e8bf92，local。未指定模型，不覆盖默认设置。
-- 接手任务编号：01a14497-480f-7590-bb23-536007bf1b2c（local，同一项目原目录）；交接状态：已接手。只读核验通过后已收到源任务修改权移交。用户2026-10-17已明确授权4.4.1 Quick跨文档分组与概览修复；实现、77项pytest、原Conda重装及全局入口验证已完成，等待用户验收。源任务此后只观察；无本轮后台测试或代理待接管。
-- 当前分支main，HEAD `84aaf15eebfd9b54e77d42d356def80cd3c72fe1`，提交标题`4.4`。本次交接保存前工作区干净；新改动仅此交接区，不自动提交/推送。上方8868449等为历史基线。
+- 接手任务编号：01a14497-480f-7590-bb23-536007bf1b2c（local，同一项目原目录）；交接状态：已接手。只读核验后已收到修改权。用户已验收4.4.2，并明确授权4.4.3；当前4.4.3实现、84项pytest、原Conda重装和全局验证已完成，等待用户验收。源任务只观察；无本轮后台测试或代理待接管。
+- 当前分支main，HEAD `33ff362e155d16720cecc9ad4df8274205fdba86`（4.4.2 2 个真实 Codex 问题的轻量测试）。4.4.3开始工作区干净，当前实现/测试/报告/状态改动未提交；本任务未执行提交/推送。交接初始84aaf15、上方8868449和阶段正文里的旧HEAD为历史快照。
 
 ### 权威成果与真实结论
 
@@ -183,6 +183,16 @@
 - 已备份并同步两份全局Skill；Core未变化，不重复安装。安装Core与源码、全局Skill/reference/launcher与项目逐字一致；项目外10次Focused search/read通过，pip check无冲突。
 - 报告：`docs/2026-10-17-pdf-reader-4.4.2-focused-evidence-token.md`；计划：`docs/superpowers/plans/2026-10-17-pdf-reader-4.4.2-focused-evidence.md`；证据：`output/reading-4.4.2/`，最终action-manifest-final.json/workflow-final/workflow-results-final.json；旧中间结果保留。
 - 局限：固定样本人工选择有已知金标准优势，未测未知问题模型自主执行效果；Core不能证明模型仍记得原文；无章节过滤；公式/复杂表格仍须必要原页查看；16素材包齐全不等于问答准确或全部视觉核验。未改4.4.1 Quick、BM25、解析/分块、Compact、缓存或PNG；未提交推送，未补旧4.3.1任务。本阶段停止等待用户确认。
+### 4.4.3实际进度（2026-10-17）
+
+- 用户已明确验收4.4.2，授权Standard/Deep管理输出优化，取代上阶段暂停于4.4.3的边界；不改阅读策略、不删正文、不改变原JSON/Compact、不进入5.0。
+- 先建立四场景同绝对记录路径、同5块/6000字符、同调用数且均含最终status的JSON/Compact基线。发现CTM局部Method的Compact status仍带59条未完全覆盖章节（绝大多范围外），每批重复record/document/mode；由测量决定新增可选`--lean`，而非修改旧Compact。
+- Core仅改`src/pdf_reader/cli.py`，新增互斥--lean响应投影；next保留所有Compact chunk字段，省顶层重复管理信息；status保留计划/全局计数、活动gap原ID/页/原因、未恢复截断、未知空提取页、计划内视觉计数与外部声明信任。`--details --lean`返回原完整审计schema。ReadingTracker、事件/coverage保存、schema1、选块/BM25/Focused/解析/PNG/缓存均不变。Skill两份指引推荐Standard/Deep Lean、Quick Compact。
+- 统一路径Compact→Lean：GAN Standard正文19829不变，总25022→24020（4.00%），管理5193→4191；CTM Method Deep正文1943不变，总5450→2815（48.35%），管理3507→872；Attention Standard总10569→9544；TRAE Standard总19869→17205。调用数依次11/4/10/16，未省status，不是账单或不同任务等价比较。
+- 82次旧JSON/Compact响应逐字一致；Lean全部正文/ID/原页/章节/截断/风险、事件流和完整coverage一致（仅独立reading_id不同）。四文档12组计划不变；16冻结Focused hits和16代表read一致、旧四检索Top1保留；旧/新日志只读恢复正常。1888保护条目仅cli.py和两份Skill预期变化，全部旧评估/PDF/缓存不变。
+- 5新增Lean案例先红灯，阅读专项50 passed；完整pytest **84 passed in 61.24s**，含默认Deep/all、截断/gap、补读、flush失败及Windows PNG并发。原Conda按既有非editable/no-deps/no-build-isolation方式重装，备份并同步全局Skill；安装所有Core及Skill/reference/launcher逐字匹配，项目外固定入口23次调用通过，pip check无冲突。
+- 报告`docs/2026-10-17-pdf-reader-4.4.3-management-overhead.md`；计划`docs/superpowers/plans/2026-10-17-pdf-reader-4.4.3-management-output.md`；证据`output/reading-4.4.3/`（before/after分阶段metrics、comparison.json、pytest-release.txt、global-validation.json等）。原证据不清理，安装build已归档到本轮install-build。
+- 仍有完整长章节路径、JSON包装和按需完整审计开销；持久化coverage计算/日志体积未优化。公式/表格/语义可靠性仍需原有核验。建议用户验收本轮后正式结束4.4，不为固定Token比例扩大范围。当前停止等待确认，无提交推送、无Agent矩阵、无旧4.3.1补测、不自动进入5.0。
 <!-- PDFREADER-HANDOFF-END PH-20261016-441 -->
 
 
