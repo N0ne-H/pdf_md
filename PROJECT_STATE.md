@@ -133,3 +133,45 @@
 - 结论：评估工作已完成，**当前版本未达到4.4完整质量验收标准**，阻塞为GAN Quick跨文档分组/选择失败；源码与元数据可复现，不能归BM25。报告只提出最小选块/跨块/响应开销建议，未实施。暂不建议立即进入5.0更换解析栈，先等用户确认是否授权小修及复测。本阶段停止等待用户确认。
 
 <!-- PDFREADER-HANDOFF-END PH-20261015-432 -->
+
+<!-- PDFREADER-HANDOFF-BEGIN PH-20261016-441 -->
+## 面向4.4.1的交接（2026-10-16）
+
+- 交接编号：PH-20261016-441；源任务：01a13fde-a2c9-74e3-af01-41a3aadab0f7。
+- 用户明确调用project-handoff要求“创建新对话4.4.1”，授权保存、同一项目原目录创建并打开、只读核对后接续。工作目录：`D:\大学学习\大二上\codex`；项目ID：d829174b-622a-45fc-8b60-7ad4a1e8bf92，local。未指定模型，不覆盖默认设置。
+- 接手任务编号：01a14497-480f-7590-bb23-536007bf1b2c（local，同一项目原目录）；交接状态：已接手。只读核验通过后已收到源任务修改权移交。用户2026-10-17已明确授权4.4.1 Quick跨文档分组与概览修复；实现、77项pytest、原Conda重装及全局入口验证已完成，等待用户验收。源任务此后只观察；无本轮后台测试或代理待接管。
+- 当前分支main，HEAD `84aaf15eebfd9b54e77d42d356def80cd3c72fe1`，提交标题`4.4`。本次交接保存前工作区干净；新改动仅此交接区，不自动提交/推送。上方8868449等为历史基线。
+
+### 权威成果与真实结论
+
+以下为4.4历史评估快照：评估已完成，原版本未达到4.4完整质量验收标准。用户已于2026-10-17授权4.4.1修复，见本区末尾新进度；不能将4.4失败快照当作修复后结果。4.4报告：`docs/2026-10-16-pdf-reader-4.4-evaluation.md`；完整本地原始证据：`output/reading-4.4/`，该目录被Git忽略，仅本机原目录保留，不清理。报告中的原页事实、冻结anchors.json、views-ledger.json、focused-assessment.json、mode-assessment.json和summary.json可核对具体结论。
+
+- 4份PDF实际名称、SHA、页数及结构见报告和inventory.json/documents.json。新增GAN综述13页56块，全文MD23997 Token；CTM44页177块，全文MD36436 Token。原Attention15页和TRAE32页只做少量回归。
+- 基于原PDF先冻结16锚点，再检索；实际查看12张代表原页，未把图片路径当查看。Focused完整素材包Top1为7/16，Top5为14/16。CTM两题缺块存在缓存，金标准指导补读不算原Top5成功；不等同模型回答准确率。
+- 阻塞P1：GAN Quick仅选c000035一个不完整表格块，缺概览。共享英文副标题祖先使Quick按[:2]章节分组坍缩，Standard的Methods匹配祖先使其选全44个正文块；非BM25根因。最小建议是纠正共享包装标题下真实章节分组并做角色覆盖回归，但尚未获授权实施。
+- GAN Standard完整CLI25011 Token超过全文MD23997；CTM Quick16块漏明确局限等，Standard37块完整CLI11828。管理输出开销、跨块表格/公式视觉风险和提示查询词依赖为其他问题，详报告。不同模式范围不同，不把较少Token宣称同任务等价收益。
+- 指定Deep与all本地覆盖一致：GAN页9–11的13块、CTM第3节10块；all分别56/177块。计划/成功stdout/原文/记录一致；本地CLI交付不是模型阅读全文。全部Token离线cl100k_base，不是计费结果。
+- 完整pytest：`output/reading-4.4/pytest-release.txt`，68 passed in 108.97s，含Windows并发PNG回归。final-validation.json记录190条任务调用stderr全空、原PDF和保护文件未变、实际查看12页。4.4未修改Core/Skill/算法/缓存，18项保护哈希不变，安装版本仍匹配，不需重装。
+- 旧Attention/TRAE四个锚点均Top1，Quick/Standard/默认Deep计划与4.3.2一致，Attention Quick仍覆盖3–5页核心方法7块；原页缓存稳定无临时残留，原4.3.1八项251文件哈希未变。
+
+### 保留的边界与历史状态
+
+保持Python Core + 全局Skill，原Conda为`D:\env\conda\2024\envs\pdf-md-v1\python.exe`；固定入口`C:\Users\26214\.agents\skills\pdf-reader\scripts\reader.py`；固定缓存`C:\Users\26214\.cache\pdf-reader`。保留Compact、页码/风险提示、断点/截断/gap、4.3.2.1 PNG修复。不引入MinerU/OCR/向量库/MCP/付费API或新模型，不做无关重构，不自动提交/推送，不擅自进入5.0。4.4仅测试报告的授权不等于新修复授权。
+
+4.3.2.1通过Windows非覆盖发布+共享读写删除句柄解决已复现竞争，无重试；十轮四进程通过，外部独占锁/ACL/强制终止等风险仍不能保证。详其独立报告。4.3.1历史E2E仍9/12，最终报告不存在，三个手册流程40/75、35/84、45/84，不能标为已验收。用户已明确不补跑剩余大规模Agent测试；不重启12任务矩阵、真实模型问答或自评分。
+
+### 接续第一步和修改权
+
+接手核验、修改权移交和4.4.1范围确认均已完成。用户明确要求只修复Quick策略，检查CTM，四文档本地回归/Token对比、完整pytest、原Conda安装验证，完成后停止；不进入4.4.2/5.0，不改解析/BM25/分块/缓存/Compact/PNG，不运行多Agent或全文模型深读。
+
+### 4.4.1实际进度（2026-10-17）
+
+- 仅改Core的`src/pdf_reader/reading.py`，基于正文公共路径归一化、正文代表优先、块内显式概览/局限标记、无清晰章节时分散回退、同节跨页明显英文断句一层补读。没有文档标题/固定ID硬编码，未修改Skill或其固定入口。
+- 旧源码加载新测试红灯6 failed/37 passed；修复后阅读专项43 passed；全量77 passed in 59.89s（原68项+9项）。原Conda按`--no-deps --no-build-isolation --force-reinstall .`非editable安装完成，源码/安装全部Core及项目/全局Skill一致，pip check通过；项目外四文档全局Quick计划、首批阅读和status正常。
+- GAN Quick 1→10/56块，正文1234→4724 Token，完整CLI3082→7285；已选问题/方法/实验设置/比较/结论代表。CTM16→19/177块，正文3431→3873、CLI7442→7947；新增c000030/c000044连续前文及c000046明确局限。Attention16→18，原核心证据全保留并补两块前文；TRAE11块ID不变、九章保留。四文档Standard/默认Deep计划ID不变。
+- 冻结16锚点和原必要块组不变：GAN完整素材包0→2/8，CTM2→4/8，非Quick强制验收指标，不是模型问答准确率。585项保护条目只允许reading.py变化；原4.4证据/PDF/缓存及其他Core/Skill不变。
+- 报告：`docs/2026-10-17-pdf-reader-4.4.1-overview-reliability.md`；计划：`docs/superpowers/plans/2026-10-17-pdf-reader-4.4.1-quick-overview.md`；原始证据`output/reading-4.4.1/`（最终baseline-final/after-final、comparison.json、pytest-release.txt、install-validation.json）。首次默认pytest临时目录权限错误及早期评估脚本未成功的目录保留，不作为最终结果。
+- 剩余：GAN表格原有切分/总结续文、Standard过量选块；CTM仍有损失枚举、方法/实验深入素材未选；英文断句补读非通用语义保证，公式/表格需Focused补读和实际原页查看。未修解析栈，未补4.3.1矩阵，无提交推送。当前HEAD仍84aaf15，业务修改未提交；本阶段停止等待用户确认。
+<!-- PDFREADER-HANDOFF-END PH-20261016-441 -->
+
+

@@ -106,6 +106,101 @@ def test_quick_method_prefers_explanation_over_displaced_result_table(reading):
     assert "displaced" in select_chunks(inventory(document), "standard")
 
 
+@pytest.mark.parametrize("prefix", ["", "Report / ", "Report / Translated model subtitle / ",
+                                    "Report / Wrapper / Translation / Subtitle / "])
+def test_quick_uses_real_sections_below_shared_wrappers(reading, prefix):
+    _, document, _ = reading
+    document.chunks = [
+        Chunk("problem", document.id, prefix + "Introduction", 1, "research problem and motivation"),
+        Chunk("method", document.id, prefix + "Methods / Architecture", 2, "core design " * 20),
+        Chunk("detail", document.id, prefix + "Methods / Architecture", 2, "additional detail"),
+        Chunk("comparison", document.id, prefix + "Experiments", 4, "comparison evidence"),
+        Chunk("conclusion", document.id, prefix + "Conclusion", 5, "main finding"),
+    ]
+    quick = select_chunks(inventory(document), "quick")
+    assert {"problem", "method", "comparison", "conclusion"} <= set(quick)
+    assert "detail" not in quick
+
+
+def test_quick_shared_subtitle_does_not_hide_chinese_sections(reading):
+    _, document, _ = reading
+    prefix = "调研 / Translated model survey / "
+    document.chunks = [
+        Chunk("background", document.id, prefix.rstrip(" /"), 1, "**Abstract**: research problem"),
+        Chunk("method", document.id, prefix + "1 检测方法", 2, "方法分类及核心解释" * 20),
+        Chunk("detail", document.id, prefix + "1 检测方法", 3, "补充说明"),
+        Chunk("experiment", document.id, prefix + "2 对比实验", 4, "实验设置与比较结果"),
+        Chunk("conclusion", document.id, prefix + "3 总结与展望", 5, "研究结论及局限"),
+        Chunk("table", document.id, prefix + "3 总结与展望", 5,
+              "|a|b|c|\n|---|---|---|\n" + "|1|2|3|\n" * 40),
+    ]
+    quick = set(select_chunks(inventory(document), "quick"))
+    assert {"background", "method", "experiment", "conclusion"} <= quick
+    assert "table" not in quick
+
+
+def test_quick_unstructured_fallback_is_spread_and_not_only_largest_table(reading):
+    _, document, _ = reading
+    document.chunks = [Chunk(f"part{i}", document.id, "(无标题)", i + 1, "explanation " * 30)
+                       for i in range(9)]
+    document.chunks[4] = Chunk("part4", document.id, "(无标题)", 5,
+                               "|a|b|c|\n|---|---|---|\n" + "|1|2|3|\n" * 100)
+    quick = select_chunks(inventory(document), "quick")
+    assert "part0" in quick and "part8" in quick
+    assert 3 <= len(quick) < len(document.chunks)
+    assert any(chunk_id in quick for chunk_id in ("part3", "part5"))
+
+
+def test_quick_keeps_explicit_limitations_and_one_boundary_neighbor(reading):
+    _, document, _ = reading
+    document.chunks = [
+        Chunk("intro", document.id, "Paper / Introduction", 1, "research question."),
+        Chunk("opening", document.id, "Paper / Discussion and Conclusion", 2,
+              "The result requires the\n\n2"),
+        Chunk("representative", document.id, "Paper / Discussion and Conclusion", 3,
+              "formation of an internal model. " + "Important evidence. " * 30),
+        Chunk("limitations", document.id, "Paper / Discussion and Conclusion", 3,
+              "**Limitations.** Training costs are high."),
+        Chunk("extra", document.id, "Paper / Discussion and Conclusion", 3, "Additional detail."),
+        Chunk("appendix", document.id, "Paper / Appendix", 4, "**Limitations.** Appendix only."),
+    ]
+    quick = select_chunks(inventory(document), "quick")
+    assert {"opening", "representative", "limitations"} <= set(quick)
+    assert "extra" not in quick and "appendix" not in quick
+
+
+def test_quick_continuation_can_follow_intervening_image_and_is_not_recursive(reading):
+    _, document, _ = reading
+    document.chunks = [
+        Chunk("intro", document.id, "Paper / Introduction", 1, "Problem."),
+        Chunk("before", document.id, "Paper / Results", 2, "The system **must craft the**\n\n2"),
+        Chunk("selected", document.id, "Paper / Results", 3,
+              "![](images/chart.png)\n\nFigure 1: comparison.\n\n**query** for planning. " + "Evidence. " * 40),
+        Chunk("end", document.id, "Paper / Conclusion", 4, "Main conclusion."),
+    ]
+    assert {"before", "selected"} <= set(select_chunks(inventory(document), "quick"))
+    document.chunks = [
+        Chunk("intro", document.id, "Paper / Introduction", 1, "Problem."),
+        Chunk("first", document.id, "Paper / Method", 2, "architecture " * 100),
+        Chunk("next", document.id, "Paper / Method", 3, "continuation of the"),
+        Chunk("last", document.id, "Paper / Method", 4, "remaining details."),
+        Chunk("end", document.id, "Paper / Conclusion", 5, "Main conclusion."),
+    ]
+    quick = select_chunks(inventory(document), "quick")
+    assert "next" in quick and "last" not in quick
+
+
+def test_quick_repeated_inline_overview_labels_do_not_select_every_chunk(reading):
+    _, document, _ = reading
+    document.chunks = [Chunk(f"abstract{i}", document.id, "Paper / Abstract", 1,
+                             "**Abstract**: overview. " * 20) for i in range(12)] + [
+        Chunk("method", document.id, "Paper / Method", 2, "Design."),
+        Chunk("end", document.id, "Paper / Conclusion", 3, "Findings."),
+    ]
+    quick = select_chunks(inventory(document), "quick")
+    assert len(quick) == 3
+
+
 def test_short_numeric_and_symbol_evidence_is_not_formatting(reading):
     _, document, _ = reading
     document.chunks[3:3] = [Chunk("number", document.id, "Paper / Method", 3, "93.0"),

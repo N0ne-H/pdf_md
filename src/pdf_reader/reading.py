@@ -17,6 +17,7 @@ REFERENCES = re.compile(r"(?:\*\*|^|\n)\s*(?:References|Bibliography|参考文�
 OVERVIEW = re.compile(r"abstract|introduction|contribution|result|conclusion|摘要|引言|贡献|结果|结论|总结|关于本", re.I)
 METHOD = re.compile(r"method|approach|architectur|model|attention|encoder|decoder|embedding|positional|feed.forward|方法|模型|架构|算法|机制", re.I)
 EVIDENCE = re.compile(r"experiment|result|evaluation|limitation|discussion|实验|结果|评估|局限|讨论", re.I)
+OVERVIEW_CUE = re.compile(r"(?:^|\n)\s*(?:\*\*|#+\s*)(abstract|introduction|conclusion|limitations?|摘要|引言|结论|局限性)(?=[ .。:：*]|$)", re.I)
 
 
 def substantive(chunk):
@@ -71,6 +72,18 @@ def inventory(document):
                        "characters": len(chunk.markdown), "role": role, "assets": assets,
                        "substantive": bool(assets) or substantive(chunk),
                        "evidence_warnings": assess_evidence(chunk.markdown, "")})
+        prose = [line for line in chunk.markdown.splitlines()
+                 if line.strip() and not line.startswith("|") and not IMAGE.fullmatch(line.strip())
+                 and not line.strip().isdigit()]
+        chunks[-1]["table_only"] = bool(rows) and not prose
+        chunks[-1]["overview_cues"] = [match.group(1).lower() for match in OVERVIEW_CUE.finditer(chunk.markdown)]
+        # 仅记录同节相邻页的明显英文断句；规划时只补一层，避免递归读完整节。
+        previous = document.chunks[len(chunks) - 2] if len(chunks) > 1 else None
+        tail = re.sub(r"\s+\d+\s*$", "", previous.markdown).rstrip(" *_\n") if previous else ""
+        chunks[-1]["continues_previous"] = bool(previous and previous.section == chunk.section
+            and chunk.page_number - previous.page_number == 1
+            and re.search(r"(?:^|\n\n)(?:\*\*)?[a-z]", chunk.markdown.lstrip())
+            and re.search(r"[a-zA-Z,]$", tail) and not tail.splitlines()[-1].startswith(("|", "!", "<")))
     return chunks
 
 
@@ -95,27 +108,55 @@ def select_chunks(metadata, mode):
         selected.update(item["chunk_id"] for item in body if item["assets"])
         selected.update(select_chunks(metadata, "quick"))
     else:
-        def major_title(item):
-            parts = item["section"].split(" / ")
-            return parts[1] if len(parts) > 1 else parts[0]
+        if not body:
+            body = [item for item in metadata if item["role"] == "frontmatter" and item.get("substantive", True)]
+        paths = [item["section"].split(" / ") for item in body]
+        prefix = 0
+        for titles in zip(*paths):
+            if len(set(titles)) != 1:
+                break
+            prefix += 1
 
-        if any(re.search(r"abstract|introduction|contribution|conclusion|摘要|引言|贡献|结论", major_title(item), re.I) for item in body):
+        def relative(item):
+            return item["section"].split(" / ")[prefix:]
+
+        def representative(items, method=False):
+            candidates = [item for item in items if not item.get("table_only", False)] or items
+            if method:
+                explanations = [item for item in candidates if not any(a.get("numbered_caption") for a in item["assets"])]
+                candidates = explanations or candidates
+            return max(candidates, key=lambda item: item["characters"])["chunk_id"]
+
+        scholarly = any(re.search(r"abstract|introduction|contribution|conclusion|摘要|引言|贡献|结论|总结", (relative(item) or [""])[0], re.I)
+                        or item.get("overview_cues") for item in body)
+        if scholarly:
             for section, items in groups.items():
-                label = " / ".join(section.split(" / ")[1:]) or section
+                label = " / ".join(relative(items[0]))
                 if OVERVIEW.search(label) or METHOD.search(label) or EVIDENCE.search(label):
-                    # 分页表格可能沿用上节标题，方法概览优先保留该节的解释正文。
-                    candidates = [item for item in items if not any(a.get("numbered_caption") for a in item["assets"])]
-                    if not METHOD.search(label) or EVIDENCE.search(label) or not candidates:
-                        candidates = items
-                    selected.add(max(candidates, key=lambda item: item["characters"])["chunk_id"])
+                    selected.add(representative(items, bool(METHOD.search(label) and not EVIDENCE.search(label))))
         else:
-            # 手册等没有摘要/结论的结构：按主要章节各取一个实质片段。
+            # 移除公共包装祖先后按真实分支取样，不依赖固定标题深度。
             major = {}
             for item in body:
-                key = " / ".join(item["section"].split(" / ")[:2])
+                parts = relative(item)
+                key = parts[0] if parts else ""
                 major.setdefault(key, []).append(item)
-            selected.update(max(items, key=lambda item: item["characters"])["chunk_id"] for items in major.values())
-        # 每个相关章节只取一个实质片段；不让固定前十块挤掉核心方法。
+            selected.update(representative(items) for items in major.values())
+        cues = {}
+        for item in body:
+            for cue in item.get("overview_cues", []):
+                cues.setdefault((item["section"], cue), []).append(item)
+        selected.update(representative(items) for items in cues.values())
+        if len(selected) < min(3, len(body)):
+            candidates = [item for item in body if not item.get("table_only", False)] or body
+            selected.update(candidates[index]["chunk_id"] for index in (0, len(candidates) // 2, len(candidates) - 1))
+        initial = set(selected)
+        for previous, current in zip(body, body[1:]):
+            if current.get("continues_previous") and previous["section"] == current["section"]:
+                if current["chunk_id"] in initial:
+                    selected.add(previous["chunk_id"])
+                if previous["chunk_id"] in initial:
+                    selected.add(current["chunk_id"])
     if not selected and metadata:
         selected = {metadata[0]["chunk_id"]}
     return [item["chunk_id"] for item in metadata if item["chunk_id"] in selected]
