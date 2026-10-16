@@ -289,6 +289,44 @@ def test_skill_routes_local_detail_to_focused_and_documents_to_scoped_deep():
     assert "Deep for complete reading, detailed analysis, or derivation" not in skill
 
 
+def test_focused_skill_has_context_and_gap_driven_reading_contract():
+    root = Path(__file__).resolve().parents[1] / "skills/pdf-reader"
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    reference = (root / "references/reading.md").read_text(encoding="utf-8")
+    assert "Focused evidence loop" in skill and "Focused evidence loop" in reference
+    for requirement in ("Do not read all Top-5 hits", "current-context evidence", "historical delivery",
+                        "context compaction", "search has no section filter", "Do not fabricate delivery events"):
+        assert requirement in reference
+
+
+def test_focused_reuse_does_not_log_delivery_and_full_rereads_remain_allowed(reading, capsys):
+    tracker, document, root = reading
+    # An existing record can receive supplemental Focused calls without running its plan.
+    record = root / "existing.json"
+    tracker.start(document.id, record=record)
+    invoke(tracker, capsys, "search", document.id, "method", "--reading-record", record)
+    assert tracker.status(record)["read_chunks"] == 0
+    invoke(tracker, capsys, "read", document.id, "c000004", "--reading-record", record)
+    state = tracker.load(record)
+    assert state["coverage"]["read_chunk_ids"] == ["c000004"]
+    # Offline reuse decision: no CLI call, therefore no fabricated output event.
+    assert tracker.load(record)["events"] == state["events"]
+    invoke(tracker, capsys, "read", document.id, "c000004", "--reading-record", record)
+    reread = tracker.load(record)
+    assert reread["events"][-1]["full"] == ["c000004"]
+    assert reread["coverage"]["read_chunks"] == 1
+    invoke(tracker, capsys, "reading-gap", record, "c000004", "--reason", "external output unavailable")
+    assert tracker.status(record)["read_chunks"] == 0
+    data = invoke(tracker, capsys, "read", document.id, "c000004", "--reading-record", record)
+    assert data["page_number"] == 3 and data["markdown"] == document.chunks[3].markdown
+    assert tracker.status(record)["read_chunk_ids"] == ["c000004"]
+    other = root / "other.json"
+    tracker.start(document.id, record=other)
+    assert tracker.status(other)["read_chunks"] == 0
+    invoke(tracker, capsys, "read", document.id, "c000004", "--reading-record", other)
+    assert tracker.status(other)["read_chunks"] == 1
+
+
 def test_search_located_is_not_full_read_and_duplicate_read_is_unique(reading, capsys):
     tracker, document, root = reading
     record = root / "session.json"

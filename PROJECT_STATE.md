@@ -172,6 +172,17 @@
 - 冻结16锚点和原必要块组不变：GAN完整素材包0→2/8，CTM2→4/8，非Quick强制验收指标，不是模型问答准确率。585项保护条目只允许reading.py变化；原4.4证据/PDF/缓存及其他Core/Skill不变。
 - 报告：`docs/2026-10-17-pdf-reader-4.4.1-overview-reliability.md`；计划：`docs/superpowers/plans/2026-10-17-pdf-reader-4.4.1-quick-overview.md`；原始证据`output/reading-4.4.1/`（最终baseline-final/after-final、comparison.json、pytest-release.txt、install-validation.json）。首次默认pytest临时目录权限错误及早期评估脚本未成功的目录保留，不作为最终结果。
 - 剩余：GAN表格原有切分/总结续文、Standard过量选块；CTM仍有损失枚举、方法/实验深入素材未选；英文断句补读非通用语义保证，公式/表格需Focused补读和实际原页查看。未修解析栈，未补4.3.1矩阵，无提交推送。当前HEAD仍84aaf15，业务修改未提交；本阶段停止等待用户确认。
+### 4.4.2实际进度（2026-10-17）
+
+- 用户随后明确授权Focused跨块证据补全与Token优化，取代上阶段“不进入4.4.2”的暂停边界；本阶段完成后停止，不进入4.4.3/5.0。当前基线main/`6ae871c59a602cf8b66451c54a60a12f0e92210f`（4.4.1已由现有仓库状态包含），上方84aaf15及未提交说明为4.4.1历史快照，不是当前HEAD。
+- 分析先行：C1原Top5缺c000016/c000018，C3缺c000022；正文存在缓存。实际比较拆分查询、图注、同节/相邻元数据；C1定向查询加两次read新增1478 CLI Token，C3最终查询加read新增983。没有修改Core或增加接口，没有章节过滤CLI。
+- 仅生产修改项目Skill的SKILL.md及references/reading.md：短预览按需增大、有选择完整read、缺口驱动定向/相邻补读、Codex判断充分性；区分解析缓存、历史交付与当前可用原文。上下文失效可显式重读，真实截断登记gap；复用不伪造交付事件。不创建Focused模式计划，不永久禁止已读块。
+- 复用冻结16锚点/原查询/必要块组。人工审阅固定调用的离线模拟全部16必要块组齐全：GAN八题独立CLI19525、共享18681、G8前失效19525（原48734）；CTM三种模拟均13709（原19515仅6/8，原金标准补读后20578为8/8）。不是真实模型上下文节省或自动策略成功率。共享本身仅GAN少一次c000044重读，省718正文/844 CLI Token；主要降幅来自选择读取与短预览。
+- 16原查询完整hits一致，旧Attention/TRAE四锚点仍Top1，四文档12组Quick/Standard/Deep计划与4.4.1一致。1317保护条目仅预期两份Skill变化；Core/旧证据/PDF/缓存/冻结锚点不变。
+- 新增2测试（流程契约与现有记录复用/重读/gap/独立记录行为），先红灯1 failed/2 passed，Focused子集3 passed；完整pytest **79 passed in 66.76s**。没有Agent矩阵或真实模型语义评分。实际重新查看CTM第4/5页与GAN第9页；未把其他锚点视为本轮全部视觉验证。
+- 已备份并同步两份全局Skill；Core未变化，不重复安装。安装Core与源码、全局Skill/reference/launcher与项目逐字一致；项目外10次Focused search/read通过，pip check无冲突。
+- 报告：`docs/2026-10-17-pdf-reader-4.4.2-focused-evidence-token.md`；计划：`docs/superpowers/plans/2026-10-17-pdf-reader-4.4.2-focused-evidence.md`；证据：`output/reading-4.4.2/`，最终action-manifest-final.json/workflow-final/workflow-results-final.json；旧中间结果保留。
+- 局限：固定样本人工选择有已知金标准优势，未测未知问题模型自主执行效果；Core不能证明模型仍记得原文；无章节过滤；公式/复杂表格仍须必要原页查看；16素材包齐全不等于问答准确或全部视觉核验。未改4.4.1 Quick、BM25、解析/分块、Compact、缓存或PNG；未提交推送，未补旧4.3.1任务。本阶段停止等待用户确认。
 <!-- PDFREADER-HANDOFF-END PH-20261016-441 -->
 
 
